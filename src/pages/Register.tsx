@@ -1,19 +1,48 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { Navigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
-import { searchFood, calculateKcal, TacoFood } from "@/data/taco";
+import { searchFood, calculateMacros, calculateKcal, sumMacros, TacoFood } from "@/data/taco";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Utensils, Cookie, ChevronRight, X } from "lucide-react";
+import { Utensils, Cookie, ChevronRight, X, Trash2, Pencil, Check } from "lucide-react";
+
+// ─── Tipos ───────────────────────────────────────────────────────────────────
 
 interface FoodItem {
   food: TacoFood;
   grams: number;
   kcal: number;
+  protein: number;
+  carbs: number;
+  fat: number;
 }
+
+interface SavedMeal {
+  id: string;
+  description: string;
+  kcal_total: number;
+  protein_total: number;
+  carbs_total: number;
+  fat_total: number;
+  created_at: string;
+  items: { name: string; grams: number; kcal: number }[];
+}
+
+interface SavedSnack {
+  id: string;
+  name: string;
+  grams: number;
+  kcal: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  created_at: string;
+}
+
+// ─── Componente ──────────────────────────────────────────────────────────────
 
 export default function Register() {
   const { user, loading } = useAuth();
@@ -22,16 +51,58 @@ export default function Register() {
   // Meal state
   const [mealDesc, setMealDesc] = useState("");
   const [foundFoods, setFoundFoods] = useState<{ food: TacoFood; grams: string }[]>([]);
-  const [mealItems, setMealItems] = useState<FoodItem[]>([]);
-  const [step, setStep] = useState<"describe" | "quantity" | "done">("describe");
+  const [step, setStep] = useState<"describe" | "quantity">("describe");
 
   // Snack state
   const [snackQuery, setSnackQuery] = useState("");
   const [snackResult, setSnackResult] = useState<TacoFood | null>(null);
   const [snackGrams, setSnackGrams] = useState("");
 
+  // Registros salvos do dia
+  const [meals, setMeals] = useState<SavedMeal[]>([]);
+  const [snacks, setSnacks] = useState<SavedSnack[]>([]);
+  const [loadingRecords, setLoadingRecords] = useState(true);
+
+  // Edição inline de snack
+  const [editingSnackId, setEditingSnackId] = useState<string | null>(null);
+  const [editingSnackGrams, setEditingSnackGrams] = useState("");
+
   if (loading) return null;
   if (!user) return <Navigate to="/auth" replace />;
+
+  // ── Carrega registros do dia ────────────────────────────────────────────────
+
+  const loadTodayRecords = async () => {
+    setLoadingRecords(true);
+    const today = new Date();
+    const dayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
+    const dayEnd   = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59).toISOString();
+
+    const [mealsRes, snacksRes] = await Promise.all([
+      supabase
+        .from("meals")
+        .select("id, description, kcal_total, protein_total, carbs_total, fat_total, created_at, items")
+        .eq("user_id", user.id)
+        .gte("created_at", dayStart)
+        .lte("created_at", dayEnd)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("snacks")
+        .select("id, name, grams, kcal, protein, carbs, fat, created_at")
+        .eq("user_id", user.id)
+        .gte("created_at", dayStart)
+        .lte("created_at", dayEnd)
+        .order("created_at", { ascending: false }),
+    ]);
+
+    setMeals((mealsRes.data as SavedMeal[]) || []);
+    setSnacks((snacksRes.data as SavedSnack[]) || []);
+    setLoadingRecords(false);
+  };
+
+  useEffect(() => { loadTodayRecords(); }, [user]);
+
+  // ── Refeição ───────────────────────────────────────────────────────────────
 
   const analyzeMeal = () => {
     if (!mealDesc.trim()) {
@@ -39,7 +110,13 @@ export default function Register() {
       return;
     }
 
-    const words = mealDesc.toLowerCase().split(/[,\s]+/).filter(Boolean);
+    // Filtra stopwords simples para não gerar buscas inúteis
+    const stopwords = new Set(["e", "com", "de", "da", "do", "um", "uma", "no", "na"]);
+    const words = mealDesc
+      .toLowerCase()
+      .split(/[,\s]+/)
+      .filter((w) => w.length > 1 && !stopwords.has(w));
+
     const found: { food: TacoFood; grams: string }[] = [];
     const seen = new Set<string>();
 
@@ -70,57 +147,39 @@ export default function Register() {
         toast.error(`Informe os gramas de ${f.food.name}`);
         return;
       }
-      items.push({ food: f.food, grams: g, kcal: calculateKcal(f.food, g) });
+      const macros = calculateMacros(f.food, g);
+      items.push({ food: f.food, grams: g, ...macros });
     }
 
-    const totalKcal = items.reduce((s, i) => s + i.kcal, 0);
+    const totals = sumMacros(items.map((i) => ({ kcal: i.kcal, protein: i.protein, carbs: i.carbs, fat: i.fat })));
 
     const { error } = await supabase.from("meals").insert({
-      user_id: user.id,
-      description: mealDesc,
-      items: items.map((i) => ({ name: i.food.name, grams: i.grams, kcal: i.kcal })),
-      kcal_total: totalKcal,
+      user_id:       user.id,
+      description:   mealDesc,
+      items:         items.map((i) => ({ name: i.food.name, grams: i.grams, kcal: i.kcal })),
+      kcal_total:    totals.kcal,
+      protein_total: totals.protein,
+      carbs_total:   totals.carbs,
+      fat_total:     totals.fat,
     });
 
-    if (error) {
-      toast.error("Erro ao salvar refeição");
-      return;
-    }
+    if (error) { toast.error("Erro ao salvar refeição"); return; }
 
-    toast.success(`Refeição salva! ${totalKcal} kcal 🎉`);
+    toast.success(`Refeição salva! ${totals.kcal} kcal 🎉`);
     setMealDesc("");
     setFoundFoods([]);
-    setMealItems([]);
     setStep("describe");
+    loadTodayRecords();
   };
 
-  const saveSnack = async () => {
-    if (!snackResult) return;
-    const g = parseFloat(snackGrams);
-    if (!g || g <= 0) {
-      toast.error("Informe a quantidade em gramas");
-      return;
-    }
-
-    const kcal = calculateKcal(snackResult, g);
-
-    const { error } = await supabase.from("snacks").insert({
-      user_id: user.id,
-      name: snackResult.name,
-      grams: g,
-      kcal,
-    });
-
-    if (error) {
-      toast.error("Erro ao salvar belisco");
-      return;
-    }
-
-    toast.success(`Belisco salvo! ${kcal} kcal 🍪`);
-    setSnackQuery("");
-    setSnackResult(null);
-    setSnackGrams("");
+  const deleteMeal = async (id: string) => {
+    const { error } = await supabase.from("meals").delete().eq("id", id);
+    if (error) { toast.error("Erro ao excluir refeição"); return; }
+    toast.success("Refeição removida");
+    setMeals((prev) => prev.filter((m) => m.id !== id));
   };
+
+  // ── Belisco ────────────────────────────────────────────────────────────────
 
   const searchSnack = () => {
     const results = searchFood(snackQuery);
@@ -131,17 +190,79 @@ export default function Register() {
     }
   };
 
+  const saveSnack = async () => {
+    if (!snackResult) return;
+    const g = parseFloat(snackGrams);
+    if (!g || g <= 0) { toast.error("Informe a quantidade em gramas"); return; }
+
+    const macros = calculateMacros(snackResult, g);
+
+    const { error } = await supabase.from("snacks").insert({
+      user_id: user.id,
+      name:    snackResult.name,
+      grams:   g,
+      kcal:    macros.kcal,
+      protein: macros.protein,
+      carbs:   macros.carbs,
+      fat:     macros.fat,
+    });
+
+    if (error) { toast.error("Erro ao salvar belisco"); return; }
+
+    toast.success(`Belisco salvo! ${macros.kcal} kcal 🍪`);
+    setSnackQuery("");
+    setSnackResult(null);
+    setSnackGrams("");
+    loadTodayRecords();
+  };
+
+  const deleteSnack = async (id: string) => {
+    const { error } = await supabase.from("snacks").delete().eq("id", id);
+    if (error) { toast.error("Erro ao excluir belisco"); return; }
+    toast.success("Belisco removido");
+    setSnacks((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  const startEditSnack = (snack: SavedSnack) => {
+    setEditingSnackId(snack.id);
+    setEditingSnackGrams(String(snack.grams));
+  };
+
+  const saveEditSnack = async (snack: SavedSnack) => {
+    const g = parseFloat(editingSnackGrams);
+    if (!g || g <= 0) { toast.error("Quantidade inválida"); return; }
+
+    // Busca o alimento original para recalcular
+    const foods = searchFood(snack.name);
+    const food = foods[0];
+    if (!food) { toast.error("Não foi possível recalcular as calorias"); return; }
+
+    const macros = calculateMacros(food, g);
+
+    const { error } = await supabase
+      .from("snacks")
+      .update({ grams: g, kcal: macros.kcal, protein: macros.protein, carbs: macros.carbs, fat: macros.fat })
+      .eq("id", snack.id);
+
+    if (error) { toast.error("Erro ao atualizar belisco"); return; }
+
+    toast.success("Belisco atualizado!");
+    setEditingSnackId(null);
+    loadTodayRecords();
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
   return (
-    <div className="px-6 pt-12">
+    <div className="px-6 pt-12 pb-6">
       <h1 className="font-display text-2xl font-bold mb-6">Registrar</h1>
 
+      {/* Tabs */}
       <div className="flex gap-2 mb-6">
         <button
           onClick={() => setActiveTab("meal")}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-            activeTab === "meal"
-              ? "bg-primary text-primary-foreground"
-              : "bg-secondary text-secondary-foreground"
+            activeTab === "meal" ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"
           }`}
         >
           <Utensils className="h-4 w-4" /> Refeição
@@ -149,15 +270,14 @@ export default function Register() {
         <button
           onClick={() => setActiveTab("snack")}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-            activeTab === "snack"
-              ? "bg-primary text-primary-foreground"
-              : "bg-secondary text-secondary-foreground"
+            activeTab === "snack" ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"
           }`}
         >
           <Cookie className="h-4 w-4" /> Belisco
         </button>
       </div>
 
+      {/* ── ABA REFEIÇÃO ── */}
       {activeTab === "meal" && (
         <div className="space-y-4">
           {step === "describe" && (
@@ -189,7 +309,9 @@ export default function Register() {
                   <div key={f.food.name} className="flex items-center gap-3 rounded-xl bg-card p-3 border border-border">
                     <div className="flex-1">
                       <p className="font-medium text-sm text-foreground">{f.food.name}</p>
-                      <p className="text-xs text-muted-foreground">{f.food.kcal} kcal/100g</p>
+                      <p className="text-xs text-muted-foreground">
+                        {f.food.kcal} kcal · P{f.food.protein}g · C{f.food.carbs}g · G{f.food.fat}g /100g
+                      </p>
                     </div>
                     <Input
                       type="number"
@@ -219,9 +341,35 @@ export default function Register() {
               </div>
             </>
           )}
+
+          {/* Lista de refeições do dia */}
+          {meals.length > 0 && (
+            <div className="mt-6">
+              <p className="text-sm font-medium text-muted-foreground mb-3">Refeições de hoje</p>
+              <div className="space-y-2">
+                {meals.map((meal) => (
+                  <div key={meal.id} className="rounded-xl bg-card border border-border p-3 flex items-start gap-3">
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-foreground">{meal.description}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {meal.kcal_total} kcal · P {meal.protein_total}g · C {meal.carbs_total}g · G {meal.fat_total}g
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => deleteMeal(meal.id)}
+                      className="text-muted-foreground hover:text-destructive transition-colors mt-0.5"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
+      {/* ── ABA BELISCO ── */}
       {activeTab === "snack" && (
         <div className="space-y-4">
           <div>
@@ -247,7 +395,9 @@ export default function Register() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="font-medium text-foreground">{snackResult.name}</p>
-                  <p className="text-xs text-muted-foreground">{snackResult.kcal} kcal/100g</p>
+                  <p className="text-xs text-muted-foreground">
+                    {snackResult.kcal} kcal · P{snackResult.protein}g · C{snackResult.carbs}g · G{snackResult.fat}g /100g
+                  </p>
                 </div>
                 <button onClick={() => setSnackResult(null)}>
                   <X className="h-4 w-4 text-muted-foreground" />
@@ -265,14 +415,74 @@ export default function Register() {
                   className="h-12 rounded-xl"
                 />
               </div>
-              {snackGrams && parseFloat(snackGrams) > 0 && (
-                <p className="text-sm font-medium text-primary">
-                  = {calculateKcal(snackResult, parseFloat(snackGrams))} kcal
-                </p>
-              )}
+              {snackGrams && parseFloat(snackGrams) > 0 && (() => {
+                const m = calculateMacros(snackResult, parseFloat(snackGrams));
+                return (
+                  <p className="text-sm font-medium text-primary">
+                    = {m.kcal} kcal · P {m.protein}g · C {m.carbs}g · G {m.fat}g
+                  </p>
+                );
+              })()}
               <Button onClick={saveSnack} className="w-full h-12 rounded-xl">
                 Salvar belisco ✅
               </Button>
+            </div>
+          )}
+
+          {/* Lista de beliscos do dia */}
+          {snacks.length > 0 && (
+            <div className="mt-4">
+              <p className="text-sm font-medium text-muted-foreground mb-3">Beliscos de hoje</p>
+              <div className="space-y-2">
+                {snacks.map((snack) => (
+                  <div key={snack.id} className="rounded-xl bg-card border border-border p-3">
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-foreground">{snack.name}</p>
+                        {editingSnackId === snack.id ? (
+                          <div className="flex items-center gap-2 mt-1">
+                            <Input
+                              type="number"
+                              value={editingSnackGrams}
+                              onChange={(e) => setEditingSnackGrams(e.target.value)}
+                              className="h-8 w-20 rounded-lg text-center text-sm"
+                              autoFocus
+                            />
+                            <span className="text-xs text-muted-foreground">g</span>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {snack.grams}g · {snack.kcal} kcal · P {snack.protein}g · C {snack.carbs}g · G {snack.fat}g
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {editingSnackId === snack.id ? (
+                          <button
+                            onClick={() => saveEditSnack(snack)}
+                            className="text-primary hover:text-primary/80 transition-colors"
+                          >
+                            <Check className="h-4 w-4" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => startEditSnack(snack)}
+                            className="text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => deleteSnack(snack.id)}
+                          className="text-muted-foreground hover:text-destructive transition-colors"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
