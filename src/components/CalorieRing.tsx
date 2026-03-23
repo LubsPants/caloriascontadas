@@ -2,17 +2,22 @@ interface CalorieRingProps {
   consumed: number;
   target: number;
   size?: number;
+  loading?: boolean;
 }
 
-export function CalorieRing({ consumed, target, size = 200 }: CalorieRingProps) {
+export function CalorieRing({ consumed, target, size = 200, loading = false }: CalorieRingProps) {
   const percentage = Math.min((consumed / target) * 100, 100);
   const remaining = Math.max(target - consumed, 0);
   const radius = 45;
   const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (percentage / 100) * circumference;
+  const offset = loading
+    ? circumference
+    : circumference - (percentage / 100) * circumference;
 
   const color =
-    percentage >= 100
+    loading
+      ? "hsl(var(--muted))"
+      : percentage >= 100
       ? "hsl(var(--calorie-red))"
       : percentage >= 80
       ? "hsl(var(--calorie-amber))"
@@ -43,8 +48,17 @@ export function CalorieRing({ consumed, target, size = 200 }: CalorieRingProps) 
         />
       </svg>
       <div className="absolute flex flex-col items-center">
-        <span className="text-3xl font-display font-bold text-foreground">{remaining}</span>
-        <span className="text-xs text-muted-foreground">kcal restantes</span>
+        {loading ? (
+          <div className="flex flex-col items-center gap-2 animate-pulse">
+            <div className="h-8 w-16 rounded bg-muted" />
+            <div className="h-3 w-20 rounded bg-muted" />
+          </div>
+        ) : (
+          <>
+            <span className="text-3xl font-display font-bold text-foreground">{remaining}</span>
+            <span className="text-xs text-muted-foreground">kcal restantes</span>
+          </>
+        )}
       </div>
     </div>
   );
