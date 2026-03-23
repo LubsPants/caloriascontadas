@@ -73,3 +73,34 @@ export function searchFood(query: string): TacoFood[] {
 export function calculateKcal(food: TacoFood, grams: number): number {
   return Math.round((food.kcal * grams) / 100);
 }
+
+export interface Macros {
+  kcal: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+}
+
+/** Calcula kcal + macros de um alimento para uma quantidade em gramas */
+export function calculateMacros(food: TacoFood, grams: number): Macros {
+  const factor = grams / 100;
+  return {
+    kcal:    Math.round(food.kcal    * factor),
+    protein: Math.round(food.protein * factor * 10) / 10,
+    carbs:   Math.round(food.carbs   * factor * 10) / 10,
+    fat:     Math.round(food.fat     * factor * 10) / 10,
+  };
+}
+
+/** Soma um array de Macros */
+export function sumMacros(list: Macros[]): Macros {
+  return list.reduce(
+    (acc, m) => ({
+      kcal:    acc.kcal    + m.kcal,
+      protein: Math.round((acc.protein + m.protein) * 10) / 10,
+      carbs:   Math.round((acc.carbs   + m.carbs)   * 10) / 10,
+      fat:     Math.round((acc.fat     + m.fat)     * 10) / 10,
+    }),
+    { kcal: 0, protein: 0, carbs: 0, fat: 0 }
+  );
+}
