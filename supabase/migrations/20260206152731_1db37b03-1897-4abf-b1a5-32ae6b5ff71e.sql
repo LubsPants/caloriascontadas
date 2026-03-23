@@ -1,3 +1,24 @@
+-- Migration: adicionar macros (proteína, carboidrato, gordura) nas tabelas meals e snacks
+-- Execute no Supabase: Dashboard → SQL Editor → cole e execute
+
+-- Adiciona colunas de macros na tabela meals
+ALTER TABLE public.meals
+  ADD COLUMN IF NOT EXISTS protein_total NUMERIC NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS carbs_total   NUMERIC NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS fat_total     NUMERIC NOT NULL DEFAULT 0;
+
+-- Adiciona colunas de macros na tabela snacks
+ALTER TABLE public.snacks
+  ADD COLUMN IF NOT EXISTS protein NUMERIC NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS carbs   NUMERIC NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS fat     NUMERIC NOT NULL DEFAULT 0;
+
+-- Adiciona políticas de UPDATE que estavam faltando
+CREATE POLICY IF NOT EXISTS "Users can update own meals"
+  ON public.meals FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY IF NOT EXISTS "Users can update own snacks"
+  ON public.snacks FOR UPDATE USING (auth.uid() = user_id);
 
 -- Profiles table
 CREATE TABLE public.profiles (
